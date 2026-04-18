@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>품사와 문장성분 게임 v2</title>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Comic+Neue:wght@400;700&display=swap" rel="stylesheet" />
+
+  <script src="./config.js"></script>
+  <script src="./recorder.js"></script>
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      font-family: 'Fredoka', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+    @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useMemo } = React;
+
+    // ───── Audio helpers ─────
+    let _audioCtx = null;
+    function getCtx() {
+      if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      return _audioCtx;
+    }
+    function playTone(freqs, totalMs = 250) {
+      try {
+        const ctx = getCtx();
+        const list = Array.isArray(freqs) ? freqs : [freqs];
+        const per = totalMs / list.length / 1000;
+        const now = ctx.currentTime;
+        list.forEach((f, i) => {
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'sine';
+          o.frequency.value = f;
+          g.gain.setValueAtTime(0.001, now + per * i);
+          g.gain.exponentialRampToValueAtTime(0.25, now + per * i + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.001, now + per * (i + 1));
+          o.connect(g); g.connect(ctx.destination);
+          o.start(now + per * i);
+          o.stop(now + per * (i + 1));
+        });
+      } catch (e) {}
+    }
+    const sfx = {
+      correct: () => playTone([659, 784, 988], 320),
+      partial: () => playTone([784, 659], 220),
+      wrong: () => playTone([220, 180], 320),
+      finish: () => playTone([523, 659, 784, 1047], 600),
+    };
+
+    function speak(text) {
+      try {
+        if (!('speechSynthesis' in window)) return;
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = 'en-US';
+        u.rate = 0.92;
+        u.pitch = 1.0;
+        window.speechSynthesis.speak(u);
+      } catch (e) {}
+    }
+
+    // ───── Start screen ─────
+    function StartScreen({ onStart }) {
+      const [name, setName] = useState('');
+      return (
+        <div style={styles.gameContainer}>
+          <div style={styles.gameOverContainer}>
+            <div style={{ ...styles.gameOverContent, maxWidth: 480 }}>
+              <div style={styles.resultEmoji}>📚</div>
+              <h1 style={{ ...styles.resultTitle, marginBottom: 12 }}>품사와 문장성분 게임</h1>
+              <div style={{ display: 'inline-block', background: '#764ba2', color: 'white', padding: '4px 14px', borderRadius: 20, fontWeight: 700, marginBottom: 24 }}>v2</div>
+              <p style={{ ...styles.scoreText, marginBottom: 6 }}>🔊 문장 듣기 · 💡 힌트 · 🎵 효과음</p>
+              <p style={{ ...styles.scoreText, marginBottom: 20 }}>총 15문제</p>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="이름"
+                style={{
+                  width: '100%', padding: '16px 18px', fontSize: '1.1em', border: '2px solid #e0e0e0',
+                  borderRadius: 15, marginBottom: 20, fontFamily: 'Fredoka, sans-serif', outline: 'none',
+                }}
+                onFocus={(e) => (e.target.style.borderColor = '#667eea')}
+                onBlur={(e) => (e.target.style.borderColor = '#e0e0e0')}
+              />
+              <button
+                disabled={!name.trim()}
+                onClick={() => onStart(name.trim())}
+                style={{ ...styles.restartBtn, opacity: name.trim() ? 1 : 0.5, cursor: name.trim() ? 'pointer' : 'not-allowed' }}
+              >
+                시작하기 🎮
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ───── Main game ─────
+    function PartsOfSpeechGameV2({ player, onRecord }) {
+      const [currentQuestion, setCurrentQuestion] = useState(0);
+      const [score, setScore] = useState(0);
+      const [selectedWord, setSelectedWord] = useState(null);
+      const [posAnswer, setPosAnswer] = useState(null);
+      const [componentAnswer, setComponentAnswer] = useState(null);
+      const [feedback, setFeedback] = useState('');
+      const [gameOver, setGameOver] = useState(false);
+      const [answers, setAnswers] = useState([]);
+      const [startTime] = useState(() => Date.now());
+      const [recorded, setRecorded] = useState(false);
+
+      const [posHintUsed, setPosHintUsed] = useState(false);
+      const [componentHintUsed, setComponentHintUsed] = useState(false);
+      const [posDisabled, setPosDisabled] = useState([]);
+      const [componentDisabled, setComponentDisabled] = useState([]);
+      const [hintsUsedTotal, setHintsUsedTotal] = useState(0);
+
+      const questions = [
+        { sentence: "She is happy.", words: ["She", "is", "happy"], target: 2, targetWord: "happy", pos: "형용사 (Adjective)", component: "보어 (Complement)", explanation: "happy는 주어(She)의 상태를 설명하므로 보어입니다!" },
+        { sentence: "He runs quickly.", words: ["He", "runs", "quickly"], target: 2, targetWord: "quickly", pos: "부사 (Adverb)", component: "부사어 (Adverbial)", explanation: "quickly는 동사(runs)를 어떻게 하는지 설명하므로 부사어입니다!" },
+        { sentence: "I like cats.", words: ["I", "like", "cats"], target: 2, targetWord: "cats", pos: "명사 (Noun)", component: "목적어 (Object)", explanation: "cats는 like라는 동사의 대상이므로 목적어입니다!" },
+        { sentence: "The big dog plays.", words: ["The", "big", "dog", "plays"], target: 1, targetWord: "big", pos: "형용사 (Adjective)", component: "수식어 (Modifier)", explanation: "big은 dog라는 명사를 꾸며주므로 수식어입니다!" },
+        { sentence: "My friend is kind.", words: ["My", "friend", "is", "kind"], target: 3, targetWord: "kind", pos: "형용사 (Adjective)", component: "보어 (Complement)", explanation: "kind는 friend의 특징을 설명하므로 보어입니다!" },
+        { sentence: "She eats slowly.", words: ["She", "eats", "slowly"], target: 2, targetWord: "slowly", pos: "부사 (Adverb)", component: "부사어 (Adverbial)", explanation: "slowly는 eats라는 동작을 어떻게 하는지 설명합니다!" },
+        { sentence: "John is a teacher.", words: ["John", "is", "a", "teacher"], target: 3, targetWord: "teacher", pos: "명사 (Noun)", component: "보어 (Complement)", explanation: "teacher는 John이 뭔지를 설명하므로 보어입니다!" },
+        { sentence: "The red apple is sweet.", words: ["The", "red", "apple", "is", "sweet"], target: 1, targetWord: "red", pos: "형용사 (Adjective)", component: "수식어 (Modifier)", explanation: "red는 apple을 꾸며주므로 수식어입니다!" },
+        { sentence: "They play together.", words: ["They", "play", "together"], target: 2, targetWord: "together", pos: "부사 (Adverb)", component: "부사어 (Adverbial)", explanation: "together는 play를 어떻게 하는지 설명합니다!" },
+        { sentence: "I see a bird.", words: ["I", "see", "a", "bird"], target: 3, targetWord: "bird", pos: "명사 (Noun)", component: "목적어 (Object)", explanation: "bird는 see의 대상이므로 목적어입니다!" },
+        { sentence: "Tom quickly finished his homework.", words: ["Tom", "quickly", "finished", "his", "homework"], target: 1, targetWord: "quickly", pos: "부사 (Adverb)", component: "부사어 (Adverbial)", explanation: "quickly는 동사 finished가 '어떻게' 끝났는지를 설명합니다. 문장 중간에 있어도 부사예요!" },
+        { sentence: "Sarah is a famous singer.", words: ["Sarah", "is", "a", "famous", "singer"], target: 4, targetWord: "singer", pos: "명사 (Noun)", component: "보어 (Complement)", explanation: "singer는 Sarah가 '무엇'인지 설명합니다. be동사(is) 뒤의 명사는 보어예요!" },
+        { sentence: "Birds sing beautifully in spring.", words: ["Birds", "sing", "beautifully", "in", "spring"], target: 2, targetWord: "beautifully", pos: "부사 (Adverb)", component: "부사어 (Adverbial)", explanation: "beautifully는 sing을 '어떻게' 하는지 설명하므로 부사어입니다." },
+        { sentence: "My sister always wakes up early.", words: ["My", "sister", "always", "wakes", "up", "early"], target: 2, targetWord: "always", pos: "부사 (Adverb)", component: "부사어 (Adverbial)", explanation: "always는 wakes up을 '얼마나 자주' 하는지 설명합니다. 빈도를 나타내는 부사예요!" },
+        { sentence: "The museum has many paintings.", words: ["The", "museum", "has", "many", "paintings"], target: 4, targetWord: "paintings", pos: "명사 (Noun)", component: "목적어 (Object)", explanation: "paintings는 has(가지고 있다)의 대상이므로 목적어입니다." },
+      ];
+
+      const posOptions = ["명사 (Noun)", "동사 (Verb)", "형용사 (Adjective)", "부사 (Adverb)"];
+      const componentOptions = ["주어 (Subject)", "동사 (Verb)", "보어 (Complement)", "목적어 (Object)", "수식어 (Modifier)", "부사어 (Adverbial)"];
+
+      const shuffleOptions = (correctAnswer, options) => {
+        const filtered = options.filter((opt) => opt !== correctAnswer);
+        const selected = filtered.slice(0, 3);
+        return [correctAnswer, ...selected].sort(() => Math.random() - 0.5);
+      };
+
+      const q = questions[currentQuestion];
+      const posButtonStyles = useMemo(() => shuffleOptions(q.pos, posOptions), [currentQuestion]);
+      const componentButtonStyles = useMemo(() => shuffleOptions(q.component, componentOptions), [currentQuestion, posAnswer]);
+
+      function usePosHint() {
+        if (posHintUsed) return;
+        const wrongIdxs = posButtonStyles.map((opt, i) => (opt !== q.pos ? i : -1)).filter((i) => i >= 0);
+        if (!wrongIdxs.length) return;
+        const pick = wrongIdxs[Math.floor(Math.random() * wrongIdxs.length)];
+        setPosDisabled((prev) => [...prev, pick]);
+        setPosHintUsed(true);
+        setHintsUsedTotal((n) => n + 1);
+        playTone(520, 150);
+      }
+      function useComponentHint() {
+        if (componentHintUsed) return;
+        const wrongIdxs = componentButtonStyles.map((opt, i) => (opt !== q.component ? i : -1)).filter((i) => i >= 0);
+        if (!wrongIdxs.length) return;
+        const pick = wrongIdxs[Math.floor(Math.random() * wrongIdxs.length)];
+        setComponentDisabled((prev) => [...prev, pick]);
+        setComponentHintUsed(true);
+        setHintsUsedTotal((n) => n + 1);
+        playTone(520, 150);
+      }
+
+      useEffect(() => {
+        if (gameOver && !recorded) {
+          setRecorded(true);
+          sfx.finish();
+          const duration = Math.round((Date.now() - startTime) / 1000);
+          onRecord({
+            score,
+            total: questions.length,
+            duration_sec: duration,
+            answers,
+            meta: { version: "v2", hints_used: hintsUsedTotal },
+          });
+        }
+      }, [gameOver]);
+
+      const handleWordClick = (index) => {
+        if (selectedWord === null) {
+          setSelectedWord(index);
+          setPosAnswer(null);
+          setComponentAnswer(null);
+          setFeedback('');
+        }
+      };
+
+      const handlePOSAnswer = (answer, idx) => {
+        if (posDisabled.includes(idx)) return;
+        setPosAnswer(answer);
+        if (answer === q.pos) { sfx.partial(); setFeedback('✅ 품사가 맞았어요!'); }
+        else { sfx.wrong(); setFeedback('❌ 틀렸어요. 다시 생각해보세요!'); }
+      };
+
+      const handleComponentAnswer = (answer, idx) => {
+        if (componentDisabled.includes(idx)) return;
+        setComponentAnswer(answer);
+        const posOk = posAnswer === q.pos;
+        const compOk = answer === q.component;
+        const fullOk = posOk && compOk;
+        setAnswers((prev) => [...prev, {
+          q: q.sentence, target: q.targetWord,
+          expected_pos: q.pos, chosen_pos: posAnswer,
+          expected_component: q.component, chosen_component: answer,
+          ok_pos: posOk, ok_component: compOk, ok: fullOk,
+          hint_pos: posHintUsed, hint_component: componentHintUsed,
+        }]);
+
+        if (fullOk) { sfx.correct(); setFeedback('🎉 모두 맞았어요! 정말 잘했어요!'); setScore((s) => s + 1); setTimeout(nextQuestion, 1800); }
+        else if (compOk) { sfx.partial(); setFeedback('✅ 문장성분은 맞았어요!'); }
+        else { sfx.wrong(); setFeedback('❌ 틀렸어요. 다시 생각해보세요!'); }
+      };
+
+      const nextQuestion = () => {
+        if (currentQuestion + 1 < questions.length) {
+          setCurrentQuestion(currentQuestion + 1);
+          setSelectedWord(null); setPosAnswer(null); setComponentAnswer(null); setFeedback('');
+          setPosHintUsed(false); setComponentHintUsed(false); setPosDisabled([]); setComponentDisabled([]);
+        } else { setGameOver(true); }
+      };
+
+      const resetGame = () => {
+        setCurrentQuestion(0); setScore(0); setSelectedWord(null); setPosAnswer(null); setComponentAnswer(null);
+        setFeedback(''); setGameOver(false); setAnswers([]); setRecorded(false);
+        setPosHintUsed(false); setComponentHintUsed(false); setPosDisabled([]); setComponentDisabled([]); setHintsUsedTotal(0);
+      };
+
+      if (gameOver) {
+        return (
+          <div style={styles.gameContainer}>
+            <div style={styles.gameOverContainer}>
+              <div style={styles.gameOverContent}>
+                <div style={styles.resultEmoji}>🏆</div>
+                <h1 style={styles.resultTitle}>게임 완료!</h1>
+                <p style={{ ...styles.scoreText, marginBottom: 18 }}>{player} 님</p>
+                <div style={styles.scoreBox}>
+                  <p style={styles.scoreText}>당신의 점수</p>
+                  <div style={styles.scoreBig}>{score}/{questions.length}</div>
+                  <p style={styles.scorePercent}>{Math.round((score / questions.length) * 100)}%</p>
+                  <p style={{ ...styles.scoreText, marginTop: 14, fontSize: '0.95em' }}>💡 힌트 {hintsUsedTotal}회 사용</p>
+                </div>
+                {score === questions.length && <p style={styles.perfectMsg}>🌟 완벽한 점수! 당신은 품사와 문장성분의 마스터입니다! 🌟</p>}
+                {score >= 12 && score < questions.length && <p style={styles.perfectMsg}>👏 정말 잘했어요! 조금만 더 하면 완벽할 거예요!</p>}
+                {score >= 8 && score < 12 && <p style={styles.perfectMsg}>💪 좋아요! 다시 해보면 더 올릴 수 있어요!</p>}
+                {score < 8 && <p style={styles.perfectMsg}>📚 다시 한 번 해보세요! 점점 더 잘하게 될 거예요!</p>}
+                <button onClick={resetGame} style={styles.restartBtn}>다시 게임하기 🎮</button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div style={styles.gameContainer}>
+          <div style={styles.header}>
+            <div style={styles.title}>
+              📚 품사와 문장성분 게임
+              <span style={{ fontSize: '0.55em', background: '#764ba2', padding: '4px 12px', borderRadius: 14, verticalAlign: 'middle', marginLeft: 10 }}>v2</span>
+            </div>
+            <div style={styles.progress}>
+              <span style={styles.progressText}>문제 {currentQuestion + 1}/{questions.length}</span>
+              <span style={styles.scoreDisplay}>점수: {score}</span>
+              <span style={{ ...styles.progressText, background: 'rgba(255,255,255,0.3)' }}>🙋 {player}</span>
+            </div>
+          </div>
+
+          <div style={styles.mainContent}>
+            <div style={styles.sentenceBox}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+                <p style={{ ...styles.label, marginBottom: 0 }}>📝 문장을 읽고, 파란 단어를 클릭하세요!</p>
+                <button onClick={() => speak(q.sentence)} style={styles.ttsBtn} title="문장 듣기">🔊 듣기</button>
+              </div>
+              <div style={styles.sentenceDisplay}>
+                {q.words.map((word, index) => (
+                  <span
+                    key={index}
+                    onClick={() => handleWordClick(index)}
+                    style={{
+                      ...styles.word,
+                      ...(selectedWord === index ? styles.wordSelected : {}),
+                      ...(index === q.target ? styles.wordClickable : {}),
+                    }}
+                  >
+                    {word}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {selectedWord !== null && (
+              <div style={styles.questionBox}>
+                <div style={styles.selectedWordBox}>
+                  선택한 단어:
+                  <span style={styles.selectedWordHighlight}>{q.words[selectedWord]}</span>
+                </div>
+
+                {!posAnswer ? (
+                  <div style={styles.questionSection}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 10, flexWrap: 'wrap' }}>
+                      <h3 style={{ ...styles.questionTitle, marginBottom: 0 }}>🎯 이 단어의 '품사'는 뭘까요?</h3>
+                      <button onClick={usePosHint} disabled={posHintUsed} style={{ ...styles.hintBtn, opacity: posHintUsed ? 0.4 : 1, cursor: posHintUsed ? 'default' : 'pointer' }}>
+                        💡 힌트 {posHintUsed ? '사용함' : '(1회)'}
+                      </button>
+                    </div>
+                    <div style={styles.buttonGrid}>
+                      {posButtonStyles.map((option, idx) => {
+                        const disabled = posDisabled.includes(idx);
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => handlePOSAnswer(option, idx)}
+                            disabled={disabled}
+                            style={{
+                              ...styles.optionBtn,
+                              backgroundColor: disabled ? '#bbb' : '#FF6B6B',
+                              opacity: disabled ? 0.35 : 1,
+                              cursor: disabled ? 'not-allowed' : 'pointer',
+                              textDecoration: disabled ? 'line-through' : 'none',
+                              animation: `slideIn 0.5s ease-out ${idx * 0.1}s both`,
+                            }}
+                          >
+                            {option}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={styles.questionSection}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 10, flexWrap: 'wrap' }}>
+                      <h3 style={{ ...styles.questionTitle, marginBottom: 0 }}>🎯 이 단어의 '문장성분'은 뭘까요?</h3>
+                      <button onClick={useComponentHint} disabled={componentHintUsed} style={{ ...styles.hintBtn, opacity: componentHintUsed ? 0.4 : 1, cursor: componentHintUsed ? 'default' : 'pointer' }}>
+                        💡 힌트 {componentHintUsed ? '사용함' : '(1회)'}
+                      </button>
+                    </div>
+                    <div style={styles.buttonGrid}>
+                      {componentButtonStyles.map((option, idx) => {
+                        const disabled = componentDisabled.includes(idx);
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => handleComponentAnswer(option, idx)}
+                            disabled={disabled}
+                            style={{
+                              ...styles.optionBtn,
+                              backgroundColor: disabled ? '#bbb' : '#4ECDC4',
+                              opacity: disabled ? 0.35 : 1,
+                              cursor: disabled ? 'not-allowed' : 'pointer',
+                              textDecoration: disabled ? 'line-through' : 'none',
+                              animation: `slideIn 0.5s ease-out ${idx * 0.1}s both`,
+                            }}
+                          >
+                            {option}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {feedback && (
+                  <div style={{
+                    ...styles.feedbackBox,
+                    backgroundColor: feedback.includes('✅') || feedback.includes('🎉') ? '#95E1D3' : '#FFE66D',
+                    animation: 'pulse 0.6s ease-in-out',
+                  }}>
+                    <p style={styles.feedbackText}>{feedback}</p>
+                    {feedback.includes('❌') && posAnswer && !componentAnswer && (
+                      <p style={styles.explanationText}>정답: {q.pos}</p>
+                    )}
+                  </div>
+                )}
+
+                {posAnswer && componentAnswer && (
+                  <div style={styles.explanationBox}>
+                    <p style={styles.explanationBig}>💡 {q.explanation}</p>
+                    <button onClick={nextQuestion} style={{ ...styles.nextBtn, marginTop: 20 }}>다음 문제 →</button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {selectedWord === null && (
+              <div style={styles.hintBox}>💡 위 문장에서 파란 색깔의 단어를 클릭해서 시작하세요! (🔊 듣기로 발음도 들을 수 있어요)</div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [player, setPlayer] = useState(null);
+      if (!player) return <StartScreen onStart={setPlayer} />;
+      return (
+        <PartsOfSpeechGameV2 player={player} onRecord={(payload) => window.GameRecorder.submit({ player, ...payload })} />
+      );
+    }
+
+    const styles = {
+      gameContainer: { minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: 20, fontFamily: "'Fredoka', sans-serif" },
+      header: { textAlign: 'center', marginBottom: 30, animation: 'slideIn 0.6s ease-out' },
+      title: { fontSize: '2.3em', fontWeight: 700, color: 'white', marginBottom: 15, textShadow: '2px 2px 4px rgba(0,0,0,0.2)' },
+      progress: { display: 'flex', justifyContent: 'center', gap: 14, color: 'white', fontSize: '1.0em', fontWeight: 600, flexWrap: 'wrap' },
+      progressText: { backgroundColor: 'rgba(255,255,255,0.2)', padding: '10px 18px', borderRadius: 25 },
+      scoreDisplay: { backgroundColor: '#FFD93D', padding: '10px 18px', borderRadius: 25, color: '#333', fontWeight: 700 },
+      mainContent: { maxWidth: 900, margin: '0 auto' },
+      sentenceBox: { backgroundColor: 'white', borderRadius: 20, padding: 30, marginBottom: 30, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' },
+      label: { fontSize: '1.05em', color: '#666', marginBottom: 20, fontWeight: 600 },
+      ttsBtn: { padding: '8px 16px', fontSize: '1em', fontWeight: 600, background: '#667eea', color: 'white', border: 'none', borderRadius: 20, cursor: 'pointer', fontFamily: "'Fredoka', sans-serif", boxShadow: '0 3px 8px rgba(102,126,234,0.35)' },
+      hintBtn: { padding: '8px 16px', fontSize: '0.92em', fontWeight: 600, background: '#FFB84D', color: '#5a3a00', border: 'none', borderRadius: 20, fontFamily: "'Fredoka', sans-serif", boxShadow: '0 3px 8px rgba(255,184,77,0.35)' },
+      sentenceDisplay: { fontSize: '1.8em', lineHeight: '2.2', color: '#333', fontWeight: 500 },
+      word: { margin: '0 8px', padding: '8px 12px', borderRadius: 10, cursor: 'pointer', transition: 'all 0.3s ease', display: 'inline-block' },
+      wordClickable: { backgroundColor: '#4ECDC4', color: 'white', fontWeight: 700, cursor: 'pointer' },
+      wordSelected: { backgroundColor: '#FF6B6B', color: 'white', fontWeight: 700, transform: 'scale(1.15)', boxShadow: '0 5px 15px rgba(255, 107, 107, 0.4)' },
+      questionBox: { backgroundColor: 'white', borderRadius: 20, padding: 30, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' },
+      selectedWordBox: { backgroundColor: '#FFF9E6', padding: '15px 20px', borderRadius: 15, marginBottom: 25, fontSize: '1.1em', fontWeight: 600, color: '#333' },
+      selectedWordHighlight: { backgroundColor: '#FF6B6B', color: 'white', padding: '5px 12px', borderRadius: 8, fontWeight: 700, marginLeft: 10 },
+      questionSection: { marginBottom: 20 },
+      questionTitle: { fontSize: '1.3em', color: '#333', fontWeight: 700 },
+      buttonGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 15, marginBottom: 20 },
+      optionBtn: { padding: '18px 20px', fontSize: '1.05em', fontWeight: 600, color: 'white', border: 'none', borderRadius: 15, transition: 'all 0.3s ease', boxShadow: '0 5px 15px rgba(0,0,0,0.2)', fontFamily: "'Fredoka', sans-serif" },
+      feedbackBox: { padding: 20, borderRadius: 15, marginBottom: 20, textAlign: 'center', fontSize: '1.1em', fontWeight: 600 },
+      feedbackText: { margin: 0, fontSize: '1.3em' },
+      explanationText: { marginTop: 10, fontSize: '0.95em', color: '#555' },
+      explanationBox: { backgroundColor: '#E8F5E9', padding: 25, borderRadius: 15, textAlign: 'center', borderLeft: '5px solid #4CAF50' },
+      explanationBig: { fontSize: '1.2em', color: '#333', fontWeight: 600, lineHeight: 1.6 },
+      nextBtn: { padding: '15px 40px', fontSize: '1.1em', fontWeight: 700, backgroundColor: '#667eea', color: 'white', border: 'none', borderRadius: 15, cursor: 'pointer', transition: 'all 0.3s ease', boxShadow: '0 5px 15px rgba(0,0,0,0.2)', fontFamily: "'Fredoka', sans-serif" },
+      hintBox: { backgroundColor: '#FFE66D', padding: 20, borderRadius: 15, textAlign: 'center', fontSize: '1.05em', fontWeight: 600, color: '#333' },
+      gameOverContainer: { display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' },
+      gameOverContent: { backgroundColor: 'white', padding: '50px 40px', borderRadius: 25, textAlign: 'center', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', maxWidth: 500 },
+      resultEmoji: { fontSize: '5em', marginBottom: 20 },
+      resultTitle: { fontSize: '2.4em', color: '#333', marginBottom: 20, fontWeight: 700 },
+      scoreBox: { backgroundColor: '#F0F0F0', padding: 30, borderRadius: 20, marginBottom: 30 },
+      scoreText: { fontSize: '1.05em', color: '#666', marginBottom: 10 },
+      scoreBig: { fontSize: '3.5em', fontWeight: 700, color: '#667eea', marginBottom: 10 },
+      scorePercent: { fontSize: '1.3em', color: '#764ba2', fontWeight: 600 },
+      perfectMsg: { fontSize: '1.15em', color: '#333', marginBottom: 30, lineHeight: 1.6 },
+      restartBtn: { padding: '18px 40px', fontSize: '1.2em', fontWeight: 700, backgroundColor: '#667eea', color: 'white', border: 'none', borderRadius: 15, cursor: 'pointer', transition: 'all 0.3s ease', width: '100%', boxShadow: '0 5px 15px rgba(0,0,0,0.2)', fontFamily: "'Fredoka', sans-serif" },
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
