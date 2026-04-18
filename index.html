@@ -81,13 +81,38 @@
         _voices = window.speechSynthesis.getVoices() || [];
       });
     }
+    // 노벨티/효과음 음성(특히 macOS) — 자연어 읽기에 부적합
+    const NOVELTY_RE = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Hysterical|Organ|Pipe Organ|Trinoids|Whisper|Zarvox|Junior|Kathy|Princess|Ralph|Fred|Superstar|Wobble|Jester|Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley)/i;
+    // 선호 자연 음성 (있으면 우선 선택)
+    const PREFERRED = {
+      en: ['Samantha', 'Alex', 'Daniel', 'Karen', 'Moira', 'Tessa', 'Victoria', 'Aaron', 'Nicky',
+           'Google US English', 'Google UK English Female', 'Google UK English Male',
+           'Microsoft Zira', 'Microsoft David', 'Microsoft Mark', 'Microsoft Aria'],
+      ko: ['Yuna', 'Jihye', 'Heami', 'Sora', 'Google 한국의', 'Microsoft Heami', 'Microsoft SunHi'],
+    };
     function pickVoice(lang) {
       const vs = ensureVoices();
       if (!vs.length) return null;
-      const exact = vs.find((v) => v.lang === lang);
+      const prefix = (lang || 'en-US').split('-')[0].toLowerCase();
+      const langMatches = vs.filter((v) => v.lang && v.lang.toLowerCase().startsWith(prefix));
+      if (!langMatches.length) return null;
+      const ok = (v) => !NOVELTY_RE.test(v.name);
+      // 1) 선호 목록에서 이름 일치
+      const preferred = (PREFERRED[prefix] || [])
+        .map((name) => langMatches.find((v) => ok(v) && v.name.includes(name)))
+        .find(Boolean);
+      if (preferred) return preferred;
+      // 2) 정확한 lang 태그 일치 + 비노벨티
+      const exact = langMatches.find((v) => v.lang === lang && ok(v));
       if (exact) return exact;
-      const prefix = (lang || '').split('-')[0].toLowerCase();
-      return vs.find((v) => v.lang && v.lang.toLowerCase().startsWith(prefix)) || null;
+      // 3) 로컬 음성(localService=true) 비노벨티
+      const local = langMatches.find((v) => v.localService && ok(v));
+      if (local) return local;
+      // 4) 비노벨티 아무거나
+      const nonNov = langMatches.find(ok);
+      if (nonNov) return nonNov;
+      // 5) 최후의 수단
+      return langMatches[0];
     }
     function makeUtterance(text, lang) {
       const u = new SpeechSynthesisUtterance(text);
