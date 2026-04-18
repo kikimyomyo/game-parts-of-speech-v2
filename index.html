@@ -83,6 +83,35 @@
       return m ? m[1] : option;
     }
 
+    // 괄호 앞 한국어만 추출: "형용사 (Adjective)" → "형용사"
+    function toKorean(option) {
+      return option.replace(/\s*\([^)]*\)\s*/, '').trim();
+    }
+
+    // 한국어/영어 혼합 순차 재생
+    function speakQueue(chunks) {
+      try {
+        if (!('speechSynthesis' in window)) return;
+        window.speechSynthesis.cancel();
+        chunks.forEach(({ text, lang }) => {
+          const u = new SpeechSynthesisUtterance(text);
+          u.lang = lang || 'en-US';
+          u.rate = lang === 'ko-KR' ? 1.0 : 0.92;
+          u.pitch = 1.0;
+          window.speechSynthesis.speak(u);
+        });
+      } catch (e) {}
+    }
+
+    function readQuestionAndOptions(questionKo, options) {
+      const chunks = [{ text: questionKo, lang: 'ko-KR' }];
+      options.forEach((opt) => {
+        chunks.push({ text: toKorean(opt), lang: 'ko-KR' });
+        chunks.push({ text: toEnglish(opt), lang: 'en-US' });
+      });
+      speakQueue(chunks);
+    }
+
     // 작은 스피커 아이콘 (옵션/단어 옆 재생)
     function SpeakIcon({ text, size = 20 }) {
       return (
@@ -359,7 +388,17 @@
                 {!posAnswer ? (
                   <div style={styles.questionSection}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 10, flexWrap: 'wrap' }}>
-                      <h3 style={{ ...styles.questionTitle, marginBottom: 0 }}>🎯 이 단어의 '품사'는 뭘까요?</h3>
+                      <h3 style={{ ...styles.questionTitle, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        🎯 이 단어의 '품사'는 뭘까요?
+                        <span
+                          role="button"
+                          onClick={() => readQuestionAndOptions("이 단어의 품사는 뭘까요?", posButtonStyles)}
+                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: '50%', background: '#667eea', color: 'white', cursor: 'pointer', fontSize: 16 }}
+                          title="질문+선택지 모두 듣기"
+                        >
+                          🔊
+                        </span>
+                      </h3>
                       <button onClick={usePosHint} disabled={posHintUsed} style={{ ...styles.hintBtn, opacity: posHintUsed ? 0.4 : 1, cursor: posHintUsed ? 'default' : 'pointer' }}>
                         💡 힌트 {posHintUsed ? '사용함' : '(1회)'}
                       </button>
@@ -392,7 +431,17 @@
                 ) : (
                   <div style={styles.questionSection}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 10, flexWrap: 'wrap' }}>
-                      <h3 style={{ ...styles.questionTitle, marginBottom: 0 }}>🎯 이 단어의 '문장성분'은 뭘까요?</h3>
+                      <h3 style={{ ...styles.questionTitle, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        🎯 이 단어의 '문장성분'은 뭘까요?
+                        <span
+                          role="button"
+                          onClick={() => readQuestionAndOptions("이 단어의 문장성분은 뭘까요?", componentButtonStyles)}
+                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: '50%', background: '#4ECDC4', color: 'white', cursor: 'pointer', fontSize: 16 }}
+                          title="질문+선택지 모두 듣기"
+                        >
+                          🔊
+                        </span>
+                      </h3>
                       <button onClick={useComponentHint} disabled={componentHintUsed} style={{ ...styles.hintBtn, opacity: componentHintUsed ? 0.4 : 1, cursor: componentHintUsed ? 'default' : 'pointer' }}>
                         💡 힌트 {componentHintUsed ? '사용함' : '(1회)'}
                       </button>
