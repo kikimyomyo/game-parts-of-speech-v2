@@ -112,6 +112,17 @@
       speakQueue(chunks);
     }
 
+    // 화면 폭 감지
+    function useIsMobile() {
+      const [m, setM] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 640 : false));
+      useEffect(() => {
+        const r = () => setM(window.innerWidth < 640);
+        window.addEventListener('resize', r);
+        return () => window.removeEventListener('resize', r);
+      }, []);
+      return m;
+    }
+
     // 작은 스피커 아이콘 (옵션/단어 옆 재생)
     function SpeakIcon({ text, size = 20 }) {
       return (
@@ -171,6 +182,7 @@
 
     // ───── Main game ─────
     function PartsOfSpeechGameV2({ player, onRecord }) {
+      const isMobile = useIsMobile();
       const [currentQuestion, setCurrentQuestion] = useState(0);
       const [score, setScore] = useState(0);
       const [selectedWord, setSelectedWord] = useState(null);
@@ -219,18 +231,26 @@
       const posButtonStyles = useMemo(() => shuffleOptions(q.pos, posOptions), [currentQuestion]);
       const componentButtonStyles = useMemo(() => shuffleOptions(q.component, componentOptions), [currentQuestion, posAnswer]);
 
+      // 현재 단계에 맞춰서만 읽기
       function readAll() {
         const chunks = [{ text: q.sentence, lang: 'en-US' }];
-        chunks.push({ text: "이 단어의 품사는 뭘까요?", lang: 'ko-KR' });
-        posButtonStyles.forEach((opt) => {
-          chunks.push({ text: toKorean(opt), lang: 'ko-KR' });
-          chunks.push({ text: toEnglish(opt), lang: 'en-US' });
-        });
-        chunks.push({ text: "이 단어의 문장성분은 뭘까요?", lang: 'ko-KR' });
-        componentButtonStyles.forEach((opt) => {
-          chunks.push({ text: toKorean(opt), lang: 'ko-KR' });
-          chunks.push({ text: toEnglish(opt), lang: 'en-US' });
-        });
+        if (selectedWord === null) {
+          // 단어 선택 전: 문장만
+        } else if (!posAnswer) {
+          // 품사 단계
+          chunks.push({ text: "이 단어의 품사는 뭘까요?", lang: 'ko-KR' });
+          posButtonStyles.forEach((opt) => {
+            chunks.push({ text: toKorean(opt), lang: 'ko-KR' });
+            chunks.push({ text: toEnglish(opt), lang: 'en-US' });
+          });
+        } else if (!componentAnswer) {
+          // 문장성분 단계
+          chunks.push({ text: "이 단어의 문장성분은 뭘까요?", lang: 'ko-KR' });
+          componentButtonStyles.forEach((opt) => {
+            chunks.push({ text: toKorean(opt), lang: 'ko-KR' });
+            chunks.push({ text: toEnglish(opt), lang: 'en-US' });
+          });
+        }
         speakQueue(chunks);
       }
 
@@ -345,9 +365,9 @@
       }
 
       return (
-        <div style={styles.gameContainer}>
+        <div style={{ ...styles.gameContainer, padding: isMobile ? 12 : 20 }}>
           <div style={styles.header}>
-            <div style={styles.title}>
+            <div style={{ ...styles.title, fontSize: isMobile ? '1.55em' : '2.3em', marginBottom: isMobile ? 10 : 15 }}>
               📚 품사와 문장성분 게임
               <span style={{ fontSize: '0.55em', background: '#764ba2', padding: '4px 12px', borderRadius: 14, verticalAlign: 'middle', marginLeft: 10 }}>v2</span>
             </div>
@@ -359,15 +379,15 @@
           </div>
 
           <div style={styles.mainContent}>
-            <div style={styles.sentenceBox}>
+            <div style={{ ...styles.sentenceBox, padding: isMobile ? 18 : 30, marginBottom: isMobile ? 18 : 30 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
                 <p style={{ ...styles.label, marginBottom: 0 }}>📝 문장을 읽고, 파란 단어를 클릭하세요!</p>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button onClick={() => speak(q.sentence)} style={styles.ttsBtn} title="문장만 듣기">🔊 문장</button>
-                  <button onClick={readAll} style={{ ...styles.ttsBtn, background: '#764ba2' }} title="문제와 선택지 모두 듣기">📣 전체 듣기</button>
+                  <button onClick={readAll} style={{ ...styles.ttsBtn, background: '#764ba2' }} title="현재 단계 듣기">📣 전체 듣기</button>
                 </div>
               </div>
-              <div style={styles.sentenceDisplay}>
+              <div style={{ ...styles.sentenceDisplay, fontSize: isMobile ? '1.3em' : '1.8em', lineHeight: isMobile ? 1.8 : 2.2 }}>
                 {q.words.map((word, index) => (
                   <span
                     key={index}
@@ -385,7 +405,7 @@
             </div>
 
             {selectedWord !== null && (
-              <div style={styles.questionBox}>
+              <div style={{ ...styles.questionBox, padding: isMobile ? 18 : 30 }}>
                 <div style={styles.selectedWordBox}>
                   선택한 단어:
                   <span style={styles.selectedWordHighlight}>{q.words[selectedWord]}</span>
@@ -421,7 +441,7 @@
                         💡 힌트 {posHintUsed ? '사용함' : '(1회)'}
                       </button>
                     </div>
-                    <div style={styles.buttonGrid}>
+                    <div style={{ ...styles.buttonGrid, gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)', gap: isMobile ? 10 : 15 }}>
                       {posButtonStyles.map((option, idx) => {
                         const disabled = posDisabled.includes(idx);
                         return (
@@ -437,6 +457,11 @@
                               textDecoration: disabled ? 'line-through' : 'none',
                               animation: `slideIn 0.5s ease-out ${idx * 0.1}s both`,
                               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                              padding: isMobile ? '14px 12px' : '18px 20px',
+                              fontSize: isMobile ? '0.98em' : '1.05em',
+                              minWidth: 0,
+                              whiteSpace: 'normal',
+                              wordBreak: 'keep-all',
                             }}
                           >
                             <SpeakIcon text={toEnglish(option)} size={18} />
@@ -464,7 +489,7 @@
                         💡 힌트 {componentHintUsed ? '사용함' : '(1회)'}
                       </button>
                     </div>
-                    <div style={styles.buttonGrid}>
+                    <div style={{ ...styles.buttonGrid, gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)', gap: isMobile ? 10 : 15 }}>
                       {componentButtonStyles.map((option, idx) => {
                         const disabled = componentDisabled.includes(idx);
                         return (
@@ -480,6 +505,11 @@
                               textDecoration: disabled ? 'line-through' : 'none',
                               animation: `slideIn 0.5s ease-out ${idx * 0.1}s both`,
                               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                              padding: isMobile ? '14px 12px' : '18px 20px',
+                              fontSize: isMobile ? '0.98em' : '1.05em',
+                              minWidth: 0,
+                              whiteSpace: 'normal',
+                              wordBreak: 'keep-all',
                             }}
                           >
                             <SpeakIcon text={toEnglish(option)} size={18} />
