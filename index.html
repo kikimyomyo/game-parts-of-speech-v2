@@ -219,6 +219,21 @@
       const posButtonStyles = useMemo(() => shuffleOptions(q.pos, posOptions), [currentQuestion]);
       const componentButtonStyles = useMemo(() => shuffleOptions(q.component, componentOptions), [currentQuestion, posAnswer]);
 
+      function readAll() {
+        const chunks = [{ text: q.sentence, lang: 'en-US' }];
+        chunks.push({ text: "이 단어의 품사는 뭘까요?", lang: 'ko-KR' });
+        posButtonStyles.forEach((opt) => {
+          chunks.push({ text: toKorean(opt), lang: 'ko-KR' });
+          chunks.push({ text: toEnglish(opt), lang: 'en-US' });
+        });
+        chunks.push({ text: "이 단어의 문장성분은 뭘까요?", lang: 'ko-KR' });
+        componentButtonStyles.forEach((opt) => {
+          chunks.push({ text: toKorean(opt), lang: 'ko-KR' });
+          chunks.push({ text: toEnglish(opt), lang: 'en-US' });
+        });
+        speakQueue(chunks);
+      }
+
       function usePosHint() {
         if (posHintUsed) return;
         const wrongIdxs = posButtonStyles.map((opt, i) => (opt !== q.pos ? i : -1)).filter((i) => i >= 0);
@@ -347,7 +362,10 @@
             <div style={styles.sentenceBox}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
                 <p style={{ ...styles.label, marginBottom: 0 }}>📝 문장을 읽고, 파란 단어를 클릭하세요!</p>
-                <button onClick={() => speak(q.sentence)} style={styles.ttsBtn} title="문장 듣기">🔊 듣기</button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={() => speak(q.sentence)} style={styles.ttsBtn} title="문장만 듣기">🔊 문장</button>
+                  <button onClick={readAll} style={{ ...styles.ttsBtn, background: '#764ba2' }} title="문제와 선택지 모두 듣기">📣 전체 듣기</button>
+                </div>
               </div>
               <div style={styles.sentenceDisplay}>
                 {q.words.map((word, index) => (
